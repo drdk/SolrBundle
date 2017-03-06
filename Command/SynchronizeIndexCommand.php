@@ -1,14 +1,15 @@
 <?php
 namespace FS\SolrBundle\Command;
 
-use Doctrine\Common\Persistence\AbstractManagerRegistry;
-use FS\SolrBundle\Console\ConsoleErrorListOutput;
+use Doctrine\Common\Persistence\ObjectManager;
+use Doctrine\ODM\MongoDB\DocumentRepository;
+use Doctrine\ORM\EntityRepository;
 use Symfony\Bundle\FrameworkBundle\Command\ContainerAwareCommand;
-use Symfony\Component\Console\Helper\ProgressBar;
 use Symfony\Component\Console\Input\InputArgument;
 use Symfony\Component\Console\Input\InputInterface;
 use Symfony\Component\Console\Input\InputOption;
 use Symfony\Component\Console\Output\OutputInterface;
+use Symfony\Component\Console\Question\ConfirmationQuestion;
 
 /**
  * Command synchronizes the DB with solr
@@ -23,7 +24,8 @@ class SynchronizeIndexCommand extends ContainerAwareCommand
         $this->setName('solr:index:populate')
             ->addArgument('entity', InputArgument::OPTIONAL, 'The entity you want to index', null)
             ->addOption('flushsize', null, InputOption::VALUE_OPTIONAL, 'Number of items to handle before flushing data', 500)
-            ->addOption('source', null, InputArgument::OPTIONAL, 'specify a source from where to load entities [relational, mongodb]', 'relational')
+            ->addOption('source', null, InputArgument::OPTIONAL, 'specify a source from where to load entities [relational, mongodb]', null)
+            ->addOption('start-offset', null, InputOption::VALUE_OPTIONAL, 'Start with row', 0)
             ->setDescription('Index all entities');
     }
 
@@ -34,25 +36,47 @@ class SynchronizeIndexCommand extends ContainerAwareCommand
     {
         $entities = $this->getIndexableEntities($input->getArgument('entity'));
         $source = $input->getOption('source');
+        if ($source !== null) {
+            $output->writeln('<comment>The source option is deprecated and will be removed in version 2.0</comment>');
+        }
+
+        $startOffset = $input->getOption('start-offset');
         $batchSize = $input->getOption('flushsize');
         $solr = $this->getContainer()->get('solr.client');
 
-        $objectManager = $this->getObjectManager($source);
+        if ($startOffset > 0 && count($entities) > 1) {
+            $output->writeln('<error>Wrong usage. Please use start-offset option together with the entity argument.</error>');
 
-        foreach ($entities as $entityCollection) {
-            $output->writeln(sprintf('Indexing: <info>%s</info>', $entityCollection));
+            return;
+        }
+
+        foreach ($entities as $entityClassname) {
+            $objectManager = $this->getObjectManager($entityClassname);
+
+            $output->writeln(sprintf('Indexing: <info>%s</info>', $entityClassname));
 
             try {
-                $repository = $objectManager->getRepository($entityCollection);
+                $repository = $objectManager->getRepository($entityClassname);
             } catch (\Exception $e) {
-                $output->writeln(sprintf('<error>No repository found for "%s", check your input</error>', $entityCollection));
+                $output->writeln(sprintf('<error>No repository found for "%s", check your input</error>', $entityClassname));
 
                 continue;
             }
 
-            $totalSize = $this->getTotalNumberOfEntities($entityCollection, $source);
+            $totalSize = $this->getTotalNumberOfEntities($entityClassname, $startOffset);
 
-            if ($totalSize === 0) {
+            if ($totalSize >= 500000) {
+                $helper = $this->getHelper('question');
+                $question = new ConfirmationQuestion('Indexing more than 500000 entities does not perform well and can exhaust the whole memory. Execute anyway?', false);
+
+                if (!$helper->ask($input, $output, $question)) {
+                    $output->writeln('');
+
+                    continue;
+                }
+            }
+
+            if ($totalSize <= 0) {
                 $output->writeln('<comment>No entities found for indexing</comment>');
 
                 continue;
@@ -63,7 +87,14 @@ class SynchronizeIndexCommand extends ContainerAwareCommand
             $batchLoops = ceil($totalSize / $batchSize);
 
             for ($i = 0; $i <= $batchLoops; $i++) {
-                $entities = $repository->findBy(array(), null, $batchSize, $i * $batchSize);
+                $offset = $i * $batchSize;
+                if ($startOffset && $i == 0) {
+                    $offset = $startOffset;
+                    $i++;
+                }
+
+                $entities = $repository->findBy(array(), null, $batchSize, $offset);
+
                 try {
                     $solr->synchronizeIndex($entities);
                 } catch (\Exception $e) {
@@ -77,34 +108,32 @@ class SynchronizeIndexCommand extends ContainerAwareCommand
     }
 
     /**
-     * @param string $source
+     * @param string $entityClassname
      *
-     * @throws \InvalidArgumentException if $source is unknown
      * @throws \RuntimeException if no doctrine instance is configured
      *
-     * @return AbstractManagerRegistry
+     * @return ObjectManager
      */
-    private function getObjectManager($source)
+    private function getObjectManager($entityClassname)
     {
-        $objectManager = null;
-
-        if ($source === 'relational') {
-            $objectManager = $this->getContainer()->get('doctrine');
-        } else {
-            if ($source === 'mongodb') {
-                $objectManager = $this->getContainer()->get('doctrine_mongodb');
-            } else {
-                throw new \InvalidArgumentException(sprintf('Unknown source %s', $source));
-            }
+        $objectManager = $this->getContainer()->get('doctrine')->getManagerForClass($entityClassname);
+        if ($objectManager) {
+            return $objectManager;
         }
 
-        return $objectManager;
+        $objectManager = $this->getContainer()->get('doctrine_mongodb')->getManagerForClass($entityClassname);
+        if ($objectManager) {
+            return $objectManager;
+        }
+
+        throw new \RuntimeException(sprintf('Class "%s" is not a managed entity', $entityClassname));
     }
 
     /**
      * Get a list of entities which are indexable by Solr
      *
      * @param null|string $entity
+     *
      * @return array
      */
     private function getIndexableEntities($entity = null)
@@ -133,30 +162,39 @@ class SynchronizeIndexCommand extends ContainerAwareCommand
      * Get the total number of entities in a repository
      *
      * @param string $entity
-     * @param string $source
+     * @param int    $startOffset
      *
      * @return int
-     * @throws \Exception
+     *
+     * @throws \Exception if no primary key was found for the given entity
      */
-    private function getTotalNumberOfEntities($entity, $source)
+    private function getTotalNumberOfEntities($entity, $startOffset)
     {
-        $objectManager = $this->getObjectManager($source);
+        $objectManager = $this->getObjectManager($entity);
         $repository = $objectManager->getRepository($entity);
-        $dataStoreMetadata = $objectManager->getManager()->getClassMetadata($entity);
 
-        $identifierFieldNames = $dataStoreMetadata->getIdentifierFieldNames();
+        if ($repository instanceof DocumentRepository) {
+            $totalSize = $repository->createQueryBuilder()
+                ->getQuery()
+                ->count();
+        } else {
+            $dataStoreMetadata = $objectManager->getClassMetadata($entity);
 
-        if (!count($identifierFieldNames)) {
-            throw new \Exception(sprintf('No primary key found for entity %s', $entity));
+            $identifierFieldNames = $dataStoreMetadata->getIdentifierFieldNames();
+
+            if (!count($identifierFieldNames)) {
+                throw new \Exception(sprintf('No primary key found for entity %s', $entity));
+            }
+
+            $countableColumn = reset($identifierFieldNames);
+
+            /** @var EntityRepository $repository */
+            $totalSize = $repository->createQueryBuilder('size')
+                ->select(sprintf('count(size.%s)', $countableColumn))
+                ->getQuery()
+                ->getSingleScalarResult();
         }
 
-        $countableColumn = reset($identifierFieldNames);
-
-        $totalSize = $repository->createQueryBuilder('size')
-            ->select(sprintf('count(size.%s)', $countableColumn))
-            ->getQuery()
-            ->getSingleScalarResult();
-
-        return $totalSize;
+        return $totalSize - $startOffset;
     }
 }

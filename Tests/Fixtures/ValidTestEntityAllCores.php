@@ -1,13 +1,16 @@
 <?php
-namespace FS\SolrBundle\Tests\Doctrine\Mapper;
+
+namespace FS\SolrBundle\Tests\Fixtures;
 
 use FS\SolrBundle\Doctrine\Annotation as Solr;
+use Doctrine\ORM\Mapping as ORM;
+use FS\SolrBundle\Tests\Fixtures\ValidTestEntity;
 
 /**
- *
- * @Solr\Document(boost="1")
+ * @ORM\Entity()
+ * @Solr\Document(boost="1", index="*")
  */
-class ValidTestEntityWithRelation
+class ValidTestEntityAllCores
 {
 
     /**
@@ -18,21 +21,21 @@ class ValidTestEntityWithRelation
     /**
      * @Solr\Field(type="text")
      *
-     * @var text
+     * @var string
      */
     private $text;
 
     /**
      * @Solr\Field()
      *
-     * @var text
+     * @var string
      */
     private $title;
 
     /**
-     * @Solr\Field(type="date")
+     * @Solr\Field(type="date", getter="format('d.m.Y')")
      *
-     * @var date
+     * @var \DateTime
      */
     private $created_at;
 
@@ -44,31 +47,38 @@ class ValidTestEntityWithRelation
     private $costomField;
 
     /**
-     * @var object
-     *
-     * @Solr\Field(type="strings", getter="getTitle")
-     */
-    private $relation;
-
-    /**
-     * @var object
-     *
-     * @Solr\Field(type="strings")
+     * @var ValidTestEntity[]
      */
     private $posts;
 
+    /**
+     * @var string
+     */
+    private $publishDate;
+
+    /**
+     * @var string
+     */
+    private $privateField;
+
+    /**
+     * @return int
+     */
     public function getId()
     {
         return $this->id;
     }
 
+    /**
+     * @param int $id
+     */
     public function setId($id)
     {
         $this->id = $id;
     }
 
     /**
-     * @return the $text
+     * @return string $text
      */
     public function getText()
     {
@@ -76,7 +86,7 @@ class ValidTestEntityWithRelation
     }
 
     /**
-     * @return the $title
+     * @return string $title
      */
     public function getTitle()
     {
@@ -84,7 +94,7 @@ class ValidTestEntityWithRelation
     }
 
     /**
-     * @param \FS\BlogBundle\Tests\Solr\Doctrine\Mapper\text $text
+     * @param string $text
      */
     public function setText($text)
     {
@@ -92,7 +102,7 @@ class ValidTestEntityWithRelation
     }
 
     /**
-     * @param \FS\BlogBundle\Tests\Solr\Doctrine\Mapper\text $title
+     * @param string $title
      */
     public function setTitle($title)
     {
@@ -116,7 +126,7 @@ class ValidTestEntityWithRelation
     }
 
     /**
-     * @return \FS\SolrBundle\Tests\Doctrine\Mapper\date
+     * @return \DateTime
      */
     public function getCreatedAt()
     {
@@ -124,7 +134,7 @@ class ValidTestEntityWithRelation
     }
 
     /**
-     * @param \FS\SolrBundle\Tests\Doctrine\Mapper\date $created_at
+     * @param \DateTime $created_at
      */
     public function setCreatedAt($created_at)
     {
@@ -132,23 +142,7 @@ class ValidTestEntityWithRelation
     }
 
     /**
-     * @return object
-     */
-    public function getRelation()
-    {
-        return $this->relation;
-    }
-
-    /**
-     * @param object $relation
-     */
-    public function setRelation($relation)
-    {
-        $this->relation = $relation;
-    }
-
-    /**
-     * @return object
+     * @return ValidTestEntity[]
      */
     public function getPosts()
     {
@@ -156,12 +150,43 @@ class ValidTestEntityWithRelation
     }
 
     /**
-     * @param object $posts
+     * @param ValidTestEntity[] $posts
      */
     public function setPosts($posts)
     {
         $this->posts = $posts;
     }
 
+    /**
+     * @param string $field
+     */
+    public function setField($field)
+    {
+        $this->privateField = $field;
+    }
+
+    /**
+     * @return string
+     */
+    public function getField()
+    {
+        return $this->privateField;
+    }
+
+    /**
+     * @return string
+     */
+    public function getPublishDate()
+    {
+        return $this->publishDate;
+    }
+
+    /**
+     * @param string $publishDate
+     */
+    public function setPublishDate($publishDate)
+    {
+        $this->publishDate = $publishDate;
+    }
 }
 
